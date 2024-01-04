@@ -1,0 +1,118 @@
+#!/bin/bash
+
+function is_number() {
+    re='^[0-9]+$'
+    if [[ $1 =~ $re ]]
+    then
+        is_number_result=1
+        return
+    fi
+    is_number_result=0
+}
+
+
+function read_thresholds(){
+    IFS=',' read -ra ARR <<< "$1"
+
+    if ! [[ "${#ARR[@]}" == 2 ]]
+    then
+        echo "$2 exactly two args are allowed"
+        exit 0
+    fi
+
+    for i in "${ARR[@]}"; do
+        is_number $i
+        if [[ $is_number_result = 0 ]]
+        then
+          echo "$2 only numeric age and size values"
+          exit 0
+        fi
+    done
+
+    threshold_age=${ARR[0]}
+    threshold_size=${ARR[1]}
+}
+
+
+if [[ ( $@ == "--help" ) || $@ == "-h" ]]
+then
+    echo "Usage: $0 -d [backup_dir] -w [warn_age_hours],[warn_size_mb] -c [crit_age_hours],[crit_size_mb]"
+    exit 0
+fi
+
+while getopts ':d:w:c:' OPTION; do
+    case "$OPTION" in
+        d)
+            basedir="${OPTARG}"
+            ;;
+        w)
+            read_thresholds "${OPTARG}" "-w"
+
+            warn_age=$threshold_age
+            warn_size=$threshold_size
+            ;;
+        c)
+            read_thresholds "${OPTARG}" "-c"
+
+            crit_age=$threshold_age
+            crit_size=$threshold_size
+            ;;
+
+    esac
+done
+
+if [ -z ${basedir+x} ]
+then
+    echo "-d please provide a valid directory"
+    exit 0
+fi
+
+if [[ -z ${warn_age+x} || -z ${warn_size+x} ]]
+then
+    echo "-w please provide a numeric warn_age and warn_size"
+    exit 0
+fi
+
+if [[ -z ${crit_age+x} || -z ${crit_size+x} ]]
+then
+    echo "-w please provide a numeric crit_age and crit_size"
+    exit 0
+fi
+
+warn_size=$(($warn_size*1024*1024))
+crit_size=$(($crit_size*1024*1024))
+
+lastfile=`ls -t $basedir | head -n1`
+lastdate=`date -r "$basedir/$lastfile"`
+currentdate=`date`
+
+age=$(($(($(date -d "$currentdate" "+%s") - $(date -d "$lastdate" "+%s"))) / 3600))
+size=$(stat -c%s "$basedir/$lastfile")
+
+if [ -z "$lastfile" ]; then
+    echo "CRITICAL: No Backup found | age=1000 size=0"
+    exit 2
+fi
+
+if (($size < $warn_size)); then
+    echo "WARNING: Backup size < $(($(($warn_size / 1024)) / 1024)) MB | age=$age size=$size"
+    exit 1
+fi
+
+if (($size < $crit_size)); then
+    echo "CRITICAL: Backup size < $(($(($crit_size / 1024)) / 1024)) MB | age=$age size=$size"
+    exit 2
+fi
+
+if (($age > $warn_age)); then
+    echo "WARNING: No Backup since $age hours | age=$age size=$size"
+    exit 1
+fi
+
+if (($age > $crit_age)); then
+    echo "CRITICAL: No Backup since $age hours | age=$age size=$size"
+    exit 2
+fi
+
+echo "OK: Backup found $age hours ago | age=$age size=$size"
+exit 0
